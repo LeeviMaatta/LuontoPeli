@@ -4,9 +4,18 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
+    kotlin("kapt")
 }
 
 android {
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
     namespace = "com.example.luontopeli"
     compileSdk = 35
 
@@ -20,6 +29,10 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    hilt {
+        enableAggregatingTask = false
     }
 }
 
@@ -47,7 +60,7 @@ dependencies {
 
     // Hilt (riippuvuusinjektio)
     implementation(libs.hilt.android)
-    ksp(libs.hilt.compiler)
+    kapt(libs.hilt.compiler)
     implementation(libs.hilt.navigation.compose)
 
     // OpenStreetMap — kartat ilman API-avainta (lisätään viikolla 3)
