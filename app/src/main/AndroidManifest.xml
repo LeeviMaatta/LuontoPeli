@@ -7,6 +7,27 @@
         android:name="android.hardware.sensor.stepcounter"
         android:required="false" />
 
+    <!-- Internet-lupa osmdroid-karttatiilien lataukseen -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- GPS-tarkkuussijainti -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- Verkkosijainti (varapaikannus) -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- Askelmittari (Android 10+) -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- Android 13+ (API 33+) -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <!-- Vanhemmille laitteille -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="true" />
 
     <application
         android:name=".LuontopeliApplication"
@@ -17,12 +38,12 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.LuontoPeli">
+        android:theme="@style/Theme.LuontopeliSplash">
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
-            android:theme="@style/Theme.LuontoPeli">
+            android:theme="@style/Theme.LuontopeliSplash">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
