@@ -24,6 +24,13 @@ class NatureSpotRepository(
 
     // Tallenna löytö: ensin Room, sitten Firebase
     suspend fun insertSpot(spot: NatureSpot) {
+        // Varmista anonyymi Firebase-kirjautuminen ennen userId:n käyttöä.
+        if (!authManager.isSignedIn) {
+            authManager.signInAnonymously().getOrElse { throwable ->
+                throw throwable
+            }
+        }
+
         val spotWithUser = spot.copy(userId = authManager.currentUserId)
 
         // 1. Tallenna paikallisesti HETI (toimii offline-tilassakin)
@@ -55,6 +62,12 @@ class NatureSpotRepository(
 
     // Synkronoi kaikki odottavat kohteet (kutsutaan yhteyden palautuessa)
     suspend fun syncPendingSpots() {
+        if (!authManager.isSignedIn) {
+            authManager.signInAnonymously().getOrElse { throwable ->
+                throw throwable
+            }
+        }
+
         val unsyncedSpots = dao.getUnsyncedSpots()
         unsyncedSpots.forEach { spot ->
             syncSpotToFirebase(spot)

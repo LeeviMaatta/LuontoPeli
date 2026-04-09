@@ -44,8 +44,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _classificationResult = MutableStateFlow<ClassificationResult?>(null)
     val classificationResult = _classificationResult.asStateFlow()
 
+    private val _description = MutableStateFlow("")
+    val description = _description.asStateFlow()
+
     var currentLatitude: Double = 0.0
     var currentLongitude: Double = 0.0
+
+    fun setCurrentLocation(latitude: Double, longitude: Double) {
+        currentLatitude = latitude
+        currentLongitude = longitude
+    }
+
+    fun updateDescription(text: String) {
+        _description.value = text
+    }
 
     fun takePhoto(context: Context, imageCapture: ImageCapture) {
         _isLoading.value = true
@@ -87,26 +99,35 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun saveCurrentSpot() {
+        if (_isLoading.value) return
+
         val path = _capturedImagePath.value ?: return
         val result = _classificationResult.value as? ClassificationResult.Success ?: return
 
+        _isLoading.value = true
         viewModelScope.launch {
-            val spot = NatureSpot(
-                name = result.label,
-                latitude = currentLatitude,
-                longitude = currentLongitude,
-                imageLocalPath = path,
-                plantLabel = result.label,
-                confidence = result.confidence.toFloat()
-            )
-            repository.insertSpot(spot)
-            clearCapturedImage()
+            try {
+                val spot = NatureSpot(
+                    name = result.label,
+                    latitude = currentLatitude,
+                    longitude = currentLongitude,
+                    imageLocalPath = path,
+                    plantLabel = result.label,
+                    confidence = result.confidence.toFloat(),
+                    description = _description.value.ifBlank { null }
+                )
+                repository.insertSpot(spot)
+                clearCapturedImage()
+            } finally {
+                _isLoading.value = false
+            }
         }
     }
 
     fun clearCapturedImage() {
         _capturedImagePath.value = null
         _classificationResult.value = null
+        _description.value = ""
         _isLoading.value = false
     }
 

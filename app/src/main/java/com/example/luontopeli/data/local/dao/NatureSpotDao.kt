@@ -29,6 +29,10 @@ interface NatureSpotDao {
     @Query("SELECT * FROM nature_spots WHERE synced = 0")
     suspend fun getUnsyncedSpots(): List<NatureSpot>
 
+    /** Laskee montako löytöä tallennettiin annetulla aikavälillä */
+    @Query("SELECT COUNT(*) FROM nature_spots WHERE timestamp BETWEEN :startTime AND :endTime")
+    suspend fun countSpotsInRange(startTime: Long, endTime: Long): Int
+
     /** Merkitsee löydön synkronoiduksi ja tallentaa Firebase Storage -URL:n */
     @Query("UPDATE nature_spots SET synced = 1, imageFirebaseUrl = :url WHERE id = :id")
     suspend fun markSynced(id: String, url: String)

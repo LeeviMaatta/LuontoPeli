@@ -5,22 +5,24 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.luontopeli.viewmodel.MapViewModel
-import com.example.luontopeli.viewmodel.toFormattedDate
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
+import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
 import com.example.luontopeli.viewmodel.WalkViewModel
@@ -28,6 +30,7 @@ import com.example.luontopeli.viewmodel.formatDuration
 import com.example.luontopeli.viewmodel.formatDistance
 import androidx.compose.runtime.mutableLongStateOf
 import kotlinx.coroutines.delay
+import android.location.Location
 
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
@@ -41,7 +44,8 @@ fun MapScreen(
     val permissionState = rememberMultiplePermissionsState(
         permissions = listOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            Manifest.permission.BODY_SENSORS  // Add this
         )
     )
 
@@ -77,11 +81,20 @@ fun MapScreen(
     val routePoints by mapViewModel.routePoints.collectAsState()
     val currentLocation by mapViewModel.currentLocation.collectAsState()
     val natureSpots by mapViewModel.natureSpots.collectAsState()
+    val routeDistanceMeters by remember(routePoints) {
+        derivedStateOf { calculateRouteDistance(routePoints) }
+    }
 
     // Aloita/lopeta sijaintiseuranta kävelyn tilan mukaan
     LaunchedEffect(isWalking) {
         if (isWalking) mapViewModel.startTracking()
         else mapViewModel.stopTracking()
+    }
+
+    LaunchedEffect(isWalking, routeDistanceMeters) {
+        if (isWalking) {
+            walkViewModel.syncDistance(routeDistanceMeters)
+        }
     }
 
     // Oulu oletussijaintina (koordinaatit: lat 65.01, lon 25.47)
@@ -99,20 +112,31 @@ fun MapScreen(
 
             // remember: MapView-instanssi muistetaan rekompositionien yli
             val mapViewState = remember { MapView(context) }
+            val routeOverlay = remember {
+                Polyline().apply {
+                    outlinePaint.color = 0xFF2E7D32.toInt()
+                    outlinePaint.strokeWidth = 8f
+                }
+            }
+            val markersById = remember { mutableMapOf<String, Marker>() }
+            var initialCenterDone by remember { mutableStateOf(false) }
 
-            DisposableEffect(Unit) {
+            DisposableEffect(mapViewState) {
                 // Karttatyyli: MAPNIK = OpenStreetMap-oletustiilet
                 mapViewState.setTileSource(TileSourceFactory.MAPNIK)
                 // Mahdollista monisormipinch-zoom
                 mapViewState.setMultiTouchControls(true)
+                mapViewState.zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
                 mapViewState.controller.setZoom(15.0)
                 mapViewState.controller.setCenter(
                     currentLocation?.let { GeoPoint(it.latitude, it.longitude) }
                         ?: defaultPosition
                 )
+                mapViewState.overlays.add(routeOverlay)
 
                 onDispose {
                     // Vapauta resurssit kun Composable poistuu
+                    markersById.clear()
                     mapViewState.onDetach()
                 }
             }
@@ -122,33 +146,44 @@ fun MapScreen(
                 modifier = Modifier.fillMaxSize(),
                 // update kutsutaan kun routePoints, currentLocation tai natureSpots muuttuu
                 update = { mapView ->
-                    mapView.overlays.clear()
+                    // Päivitä reittipolyline ilman että overlays-lista rakennetaan uusiksi.
+                    routeOverlay.setPoints(routePoints)
 
-                    // --- Reittiviiiva (Polyline) ---
-                    if (routePoints.size >= 2) {
-                        val polyline = Polyline().apply {
-                            setPoints(routePoints)
-                            outlinePaint.color = 0xFF2E7D32.toInt()  // M3-vihreä
-                            outlinePaint.strokeWidth = 8f
-                        }
-                        mapView.overlays.add(polyline)
+                    // --- Luontokohteiden markkerit (inkrementaalinen päivitys) ---
+                    val latestIds = natureSpots.map { it.id }.toSet()
+                    val removedIds = markersById.keys.filterNot { it in latestIds }
+                    removedIds.forEach { id ->
+                        markersById.remove(id)?.let { mapView.overlays.remove(it) }
                     }
 
-                    // --- Luontokohteiden markkerit ---
                     natureSpots.forEach { spot ->
-                        val marker = Marker(mapView).apply {
-                            position = GeoPoint(spot.latitude, spot.longitude)
-                            // Näytä kasvin nimi tai kohteen nimi info-ikkunassa
-                            title = spot.plantLabel ?: spot.name
-                            snippet = spot.timestamp.toFormattedDate()
-                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        if (markersById[spot.id] == null) {
+                            val marker = Marker(mapView).apply {
+                                position = GeoPoint(spot.latitude, spot.longitude)
+                                title = spot.plantLabel ?: spot.name
+                                snippet = buildString {
+                                    spot.description?.takeIf { it.isNotBlank() }?.let {
+                                        append(it)
+                                        append("\n")
+                                    }
+                                    append(formatTimestamp(spot.timestamp))
+                                }
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                            }
+                            markersById[spot.id] = marker
+                            mapView.overlays.add(marker)
                         }
-                        mapView.overlays.add(marker)
                     }
 
-                    // --- Seuraa nykyistä sijaintia ---
+                    // --- Seuraa nykyistä sijaintia kevyesti (ei jatkuvaa animaatiota) ---
                     currentLocation?.let { loc ->
-                        mapView.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
+                        val target = GeoPoint(loc.latitude, loc.longitude)
+                        if (!initialCenterDone) {
+                            mapView.controller.setCenter(target)
+                            initialCenterDone = true
+                        } else if (isWalking) {
+                            mapView.controller.setCenter(target)
+                        }
                     }
 
                     mapView.invalidate()  // Piirretään kartta uudelleen
@@ -189,7 +224,8 @@ fun WalkStatsCard(viewModel: WalkViewModel) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(16.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.primaryContainer
         )
@@ -204,51 +240,108 @@ fun WalkStatsCard(viewModel: WalkViewModel) {
             // Näytä tilastot vain jos sessio on olemassa
             session?.let { s ->
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = "${s.stepCount}",
-                            style = MaterialTheme.typography.headlineMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text("askelta", style = MaterialTheme.typography.bodySmall)
-                    }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = formatDistance(s.distanceMeters),
-                            style = MaterialTheme.typography.headlineMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text("matka", style = MaterialTheme.typography.bodySmall)
-                    }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = formatDuration(s.startTime, currentTime),
-                            style = MaterialTheme.typography.headlineMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text("aika", style = MaterialTheme.typography.bodySmall)
-                    }
+                    StatTile(
+                        value = s.stepCount.toString(),
+                        label = "askelta",
+                        modifier = Modifier.weight(1f)
+                    )
+                    StatTile(
+                        value = formatDistance(s.distanceMeters),
+                        label = "matka",
+                        modifier = Modifier.weight(1f)
+                    )
+                    StatTile(
+                        value = formatDuration(s.startTime, currentTime),
+                        label = "aika",
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
 
             Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp)
             ) {
                 if (!isWalking) {
                     Button(
                         onClick = { viewModel.startWalk() },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Aloita kävely") }
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(8.dp)
+                    ) {
+                        Text("Aloita kävely", style = MaterialTheme.typography.labelMedium)
+                    }
                 } else {
                     OutlinedButton(
                         onClick = { viewModel.stopWalk() },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Lopeta") }
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(8.dp)
+                    ) {
+                        Text("Lopeta", style = MaterialTheme.typography.labelMedium)
+                    }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun StatTile(
+    value: String,
+    label: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 10.dp, horizontal = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary,
+                textAlign = TextAlign.Center,
+                maxLines = 1
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+private fun calculateRouteDistance(points: List<GeoPoint>): Float {
+    if (points.size < 2) return 0f
+
+    var distance = 0f
+    for (i in 1 until points.size) {
+        val result = FloatArray(1)
+        Location.distanceBetween(
+            points[i - 1].latitude,
+            points[i - 1].longitude,
+            points[i].latitude,
+            points[i].longitude,
+            result
+        )
+        distance += result[0]
+    }
+    return distance
+}
+
+private fun formatTimestamp(timestamp: Long): String {
+    val sdf = java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault())
+    return sdf.format(java.util.Date(timestamp))
 }

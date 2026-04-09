@@ -5,12 +5,17 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.luontopeli.data.local.AppDatabase
 import com.example.luontopeli.data.local.entity.WalkSession
+import com.example.luontopeli.data.remote.firebase.AuthManager
+import com.example.luontopeli.data.remote.firebase.FirestoreManager
 import com.example.luontopeli.sensor.StepCounterManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.math.max
 
 /**
  * ViewModel kävelyn hallintaan.
@@ -25,13 +30,55 @@ class WalkViewModel(application: Application) : AndroidViewModel(application) {
     /** Room-tietokantainstanssi kävelykertojen tallentamiseen */
     private val db = AppDatabase.getDatabase(application)
 
+    /** Firebase-hallinta */
+    private val authManager = AuthManager()
+    private val firestoreManager = FirestoreManager()
+
     /** Nykyinen kävelykerta (null jos kävely ei ole käynnissä) */
     private val _currentSession = MutableStateFlow<WalkSession?>(null)
     val currentSession: StateFlow<WalkSession?> = _currentSession.asStateFlow()
 
+    /** Kaikki tallennetut kävelykerrat tilastonäkymää varten */
+    private val _sessions = MutableStateFlow<List<WalkSession>>(emptyList())
+    val sessions: StateFlow<List<WalkSession>> = _sessions.asStateFlow()
+
     /** Onko kävely parhaillaan käynnissä */
     private val _isWalking = MutableStateFlow(false)
     val isWalking: StateFlow<Boolean> = _isWalking.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            db.walkSessionDao().getAllSessions().collect { allSessions ->
+                _sessions.value = allSessions
+            }
+        }
+
+        viewModelScope.launch {
+            backfillMissingSessionsFromFirestore()
+        }
+    }
+
+    private suspend fun ensureSignedInAndGetUserId(): String {
+        if (!authManager.isSignedIn) {
+            authManager.signInAnonymously().getOrElse { throwable ->
+                throw throwable
+            }
+        }
+        return authManager.currentUserId.orEmpty()
+    }
+
+    private suspend fun backfillMissingSessionsFromFirestore() {
+        val userId = ensureSignedInAndGetUserId()
+        if (userId.isBlank()) return
+
+        val remoteSessions = firestoreManager.getUserWalkSessions(userId).first()
+        val localSessionIds = db.walkSessionDao().getAllSessions().first().map { it.id }.toSet()
+        val missingSessions = remoteSessions.filter { it.id !in localSessionIds }
+
+        missingSessions.forEach { session ->
+            db.walkSessionDao().insert(session.copy(userId = userId))
+        }
+    }
 
     /**
      * Aloittaa uuden kävelylenkin.
@@ -47,37 +94,65 @@ class WalkViewModel(application: Application) : AndroidViewModel(application) {
         _currentSession.value = session
         _isWalking.value = true
 
-        // Käynnistä askelmittari – jokainen askel päivittää session-tilaa
-        stepManager.startStepCounting {
-            _currentSession.update { current ->
-                current?.copy(
-                    stepCount = current.stepCount + 1,
-                    distanceMeters = current.distanceMeters + StepCounterManager.STEP_LENGTH_METERS
-                )
+        // Käynnistä askelmittari vain jos laite tukee sitä.
+        // Matka synkronoidaan GPS-reitistä syncDistance()-kutsulla.
+        if (stepManager.isStepSensorAvailable()) {
+            stepManager.startStepCounting {
+                _currentSession.update { current ->
+                    current?.copy(stepCount = current.stepCount + 1)
+                }
             }
         }
     }
 
     /**
+     * Synkronoi GPS-reitistä lasketun kokonaismatkan aktiiviseen sessioon.
+     * Päivittää samalla askelmäärän vähintään matkaan perustuvaan arvioon.
+     */
+    fun syncDistance(distanceMeters: Float) {
+        if (!_isWalking.value) return
+
+        _currentSession.update { current ->
+            current?.let {
+                val estimatedSteps = (distanceMeters / StepCounterManager.STEP_LENGTH_METERS).toInt()
+                it.copy(
+                    distanceMeters = distanceMeters,
+                    stepCount = max(it.stepCount, estimatedSteps)
+                )
+            }
+        }
+    }
+    /**
      * Lopettaa käynnissä olevan kävelylenkin.
      * 1. Pysäyttää askelmittarin
      * 2. Merkitsee kävelykerran päättyneeksi
      * 3. Tallentaa kävelykerran tietokantaan
+     * 4. Synkronoi kävelykerran Firebaseen
      */
     fun stopWalk() {
         stepManager.stopStepCounting()
         _isWalking.value = false
 
-        // Päivitä session lopetustiedoilla
-        _currentSession.update { it?.copy(
-            endTime = System.currentTimeMillis(),
-            isActive = false
-        )}
-
-        // Tallenna valmistunut kävely tietokantaan
+        // Tallenna valmistunut kävely tietokantaan ja Firebaseen
         viewModelScope.launch {
+            val userId = ensureSignedInAndGetUserId()
+
             _currentSession.value?.let { session ->
-                db.walkSessionDao().insert(session)
+                val endTime = System.currentTimeMillis()
+                val spotsFound = db.natureSpotDao().countSpotsInRange(session.startTime, endTime)
+
+                val completedSession = session.copy(
+                    endTime = endTime,
+                    spotsFound = spotsFound,
+                    isActive = false,
+                    userId = userId
+                )
+
+                _currentSession.value = completedSession
+
+                db.walkSessionDao().insert(completedSession)
+                // Synkronoi Firestoreen
+                firestoreManager.saveWalkSession(completedSession)
             }
         }
     }

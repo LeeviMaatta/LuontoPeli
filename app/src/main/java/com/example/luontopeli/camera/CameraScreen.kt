@@ -2,7 +2,10 @@ package com.example.luontopeli.camera
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationManager as AndroidLocationManager
 import android.util.Log
+import android.view.ScaleGestureDetector
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.*
@@ -23,6 +26,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -47,6 +51,7 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
 
     val capturedImagePath by viewModel.capturedImagePath.collectAsState()
     val classificationResult by viewModel.classificationResult.collectAsState()
+    val description by viewModel.description.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
 
     var hasCameraPermission by remember {
@@ -55,13 +60,42 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
                     == PackageManager.PERMISSION_GRANTED
         )
     }
+    var hasLocationPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        )
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted -> hasCameraPermission = granted }
 
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        hasLocationPermission = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+    }
+
     LaunchedEffect(Unit) {
         if (!hasCameraPermission) permissionLauncher.launch(Manifest.permission.CAMERA)
+        if (!hasLocationPermission) {
+            locationPermissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
+        }
+    }
+
+    LaunchedEffect(hasLocationPermission) {
+        if (hasLocationPermission) {
+            getLastKnownLocation(context)?.let { location ->
+                viewModel.setCurrentLocation(location.latitude, location.longitude)
+            }
+        }
     }
 
     if (!hasCameraPermission) {
@@ -76,6 +110,25 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
                 factory = { ctx ->
                     val previewView = PreviewView(ctx)
                     val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+                    var boundCamera: Camera? = null
+
+                    val scaleGestureDetector = ScaleGestureDetector(ctx,
+                        object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                                val camera = boundCamera ?: return false
+                                val zoomState = camera.cameraInfo.zoomState.value ?: return false
+                                val newZoomRatio = (zoomState.zoomRatio * detector.scaleFactor)
+                                    .coerceIn(zoomState.minZoomRatio, zoomState.maxZoomRatio)
+                                camera.cameraControl.setZoomRatio(newZoomRatio)
+                                return true
+                            }
+                        }
+                    )
+
+                    previewView.setOnTouchListener { _, event ->
+                        scaleGestureDetector.onTouchEvent(event)
+                        true
+                    }
 
                     cameraProviderFuture.addListener({
                         val cameraProvider = cameraProviderFuture.get()
@@ -85,7 +138,7 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
 
                         try {
                             cameraProvider.unbindAll()
-                            cameraProvider.bindToLifecycle(
+                            boundCamera = cameraProvider.bindToLifecycle(
                                 lifecycleOwner,
                                 CameraSelector.DEFAULT_BACK_CAMERA,
                                 preview,
@@ -135,6 +188,21 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
                     }
                 }
 
+                // Description Input
+                if (classificationResult is ClassificationResult.Success) {
+                    TextField(
+                        value = description,
+                        onValueChange = { viewModel.updateDescription(it) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        label = { Text("Kuvaus (valinnainen)") },
+                        singleLine = false,
+                        maxLines = 3,
+                        placeholder = { Text("Lisää kuvaus löydöstä...") }
+                    )
+                }
+
                 // Action Buttons
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -147,11 +215,19 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
                     }
                     Button(
                         onClick = { viewModel.saveCurrentSpot() },
-                        enabled = classificationResult is ClassificationResult.Success
+                        enabled = classificationResult is ClassificationResult.Success && !isLoading
                     ) {
-                        Icon(Icons.Default.Save, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Tallenna löytö")
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                color = Color.White,
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(Icons.Default.Save, null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Tallenna löytö")
+                        }
                     }
                 }
             }
@@ -201,4 +277,28 @@ fun ClassificationResultCard(result: ClassificationResult) {
             }
         }
     }
+}
+
+private fun getLastKnownLocation(context: android.content.Context): Location? {
+    val hasFine = ActivityCompat.checkSelfPermission(
+        context,
+        Manifest.permission.ACCESS_FINE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED
+    val hasCoarse = ActivityCompat.checkSelfPermission(
+        context,
+        Manifest.permission.ACCESS_COARSE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED
+
+    if (!hasFine && !hasCoarse) return null
+
+    val locationManager = context.getSystemService(android.content.Context.LOCATION_SERVICE) as AndroidLocationManager
+    val providers = listOf(
+        AndroidLocationManager.GPS_PROVIDER,
+        AndroidLocationManager.NETWORK_PROVIDER,
+        AndroidLocationManager.PASSIVE_PROVIDER
+    )
+
+    return providers
+        .mapNotNull { provider -> runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull() }
+        .maxByOrNull { it.time }
 }

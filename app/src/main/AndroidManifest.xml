@@ -13,10 +13,11 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <!-- Verkkosijainti (varapaikannus) -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <!-- Askelmittari (Android 10+) -->
-    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
 
     <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- Askelmittari-sensorin käyttö (Android 6.0+) -->
+    <uses-permission android:name="android.permission.BODY_SENSORS" />
 
     <!-- Android 13+ (API 33+) -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />

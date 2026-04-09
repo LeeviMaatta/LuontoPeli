@@ -23,5 +23,6 @@ data class WalkSession(
     val stepCount: Int = 0,
     val distanceMeters: Float = 0f,
     val spotsFound: Int = 0,
-    val isActive: Boolean = true
+    val isActive: Boolean = true,
+    val userId: String? = null
 )

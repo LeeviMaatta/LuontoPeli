@@ -35,6 +35,9 @@ data class NatureSpot(
     /** ML Kit -tunnistuksen luottamusarvo (0.0–1.0) */
     val confidence: Float? = null,
 
+    /** Käyttäjän kirjoittama kuvaus luontolöydöstä */
+    val description: String? = null,
+
     /** Firebase Auth -käyttäjätunniste (UID) */
     val userId: String? = null,
     /** Löydön aikaleima millisekunteina (epoch) */

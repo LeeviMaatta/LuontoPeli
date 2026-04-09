@@ -12,10 +12,7 @@ import androidx.navigation.compose.rememberNavController
 import com.example.luontopeli.ui.navigation.LuontopeliBottomBar
 import com.example.luontopeli.ui.navigation.LuontopeliNavHost
 import com.example.luontopeli.ui.theme.LuontopeliTheme
-import dagger.hilt.android.AndroidEntryPoint
 
-// @AndroidEntryPoint aktivoi Hilt-riippuvuusinjektoin tässä Activityssa
-@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         // Asenna splash screen ENNEN super.onCreate()-kutsua

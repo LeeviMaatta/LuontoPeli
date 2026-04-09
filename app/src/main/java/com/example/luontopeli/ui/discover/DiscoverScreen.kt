@@ -27,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,8 +37,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.example.luontopeli.data.local.entity.NatureSpot
-import com.example.luontopeli.viewmodel.toFormattedDate
+import com.google.firebase.storage.FirebaseStorage
 import java.io.File
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 @Composable
 fun DiscoverScreen(viewModel: DiscoverViewModel = viewModel()) {
@@ -78,13 +81,38 @@ fun DiscoverScreen(viewModel: DiscoverViewModel = viewModel()) {
 
 @Composable
 fun NatureSpotCard(spot: NatureSpot) {
+    val firebaseDownloadUrl by produceState<String?>(
+        initialValue = null,
+        key1 = spot.imageFirebaseUrl
+    ) {
+        val rawUrl = spot.imageFirebaseUrl
+        if (rawUrl.isNullOrBlank() || !rawUrl.startsWith("gs://")) {
+            value = rawUrl
+            return@produceState
+        }
+
+        value = try {
+            FirebaseStorage.getInstance()
+                .getReferenceFromUrl(rawUrl)
+                .downloadUrl
+                .await()
+                .toString()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Row(modifier = Modifier.padding(12.dp)) {
             // Kuva vasemmalla
-            val imageModel = spot.imageFirebaseUrl ?: spot.imageLocalPath?.let { File(it) }
+            val imageModel = when {
+                !firebaseDownloadUrl.isNullOrBlank() -> firebaseDownloadUrl
+                !spot.imageLocalPath.isNullOrBlank() -> File(spot.imageLocalPath)
+                else -> null
+            }
             if (imageModel != null) {
                 AsyncImage(
                     model = imageModel,
@@ -141,13 +169,40 @@ fun NatureSpotCard(spot: NatureSpot) {
                     )
                 }
 
+                spot.description?.takeIf { it.isNotBlank() }?.let { desc ->
+                    Text(
+                        text = desc,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+
+                Text(
+                    text = "${"%.5f".format(spot.latitude)}, ${"%.5f".format(spot.longitude)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+
                 // Päivämäärä
                 Text(
-                    text = spot.timestamp.toFormattedDate(),
+                    text = formatTimestamp(spot.timestamp),
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.Gray
                 )
             }
         }
     }
+}
+
+private suspend fun <T> com.google.android.gms.tasks.Task<T>.await(): T {
+    return kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+        addOnSuccessListener { result -> continuation.resume(result) }
+        addOnFailureListener { error -> continuation.resumeWithException(error) }
+    }
+}
+
+private fun formatTimestamp(timestamp: Long): String {
+    val sdf = java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault())
+    return sdf.format(java.util.Date(timestamp))
 }

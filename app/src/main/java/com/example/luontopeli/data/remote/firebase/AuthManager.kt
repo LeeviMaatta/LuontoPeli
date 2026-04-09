@@ -1,29 +1,44 @@
 package com.example.luontopeli.data.remote.firebase
 
-/**
- * Offline-tilassa toimiva käyttäjähallinta (AuthManager).
- * Korvaa alkuperäisen Firebase Authentication -toteutuksen
- * paikallisella UUID-pohjaisella käyttäjätunnisteella.
- */
+import com.google.firebase.auth.FirebaseAuth
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.suspendCancellableCoroutine
+
 class AuthManager {
-    /** Paikallisesti generoitu uniikki käyttäjätunniste (UUID) */
-    private val localUserId: String = java.util.UUID.randomUUID().toString()
+    private val auth: FirebaseAuth = FirebaseAuth.getInstance()
 
     /** Palauttaa nykyisen käyttäjän tunnisteen */
     val currentUserId: String
-        get() = localUserId
+        get() = auth.currentUser?.uid.orEmpty()
 
-    /** Offline-tilassa käyttäjä on aina "kirjautunut sisään" */
+    /** Onko käyttäjä kirjautunut Firebaseen. */
     val isSignedIn: Boolean
-        get() = true
+        get() = auth.currentUser != null
 
-    /** Simuloi anonyymiä kirjautumista. Palauttaa aina onnistuneen tuloksen paikallisella UUID:lla. */
+    /**
+     * Kirjautuu anonyymisti Firebaseen.
+     * Jos käyttäjä on jo kirjautunut, palauttaa nykyisen uid:n.
+     */
     suspend fun signInAnonymously(): Result<String> {
-        return Result.success(localUserId)
+        if (isSignedIn) {
+            return Result.success(currentUserId)
+        }
+
+        return try {
+            val result = suspendCancellableCoroutine<com.google.firebase.auth.AuthResult> { cont ->
+                auth.signInAnonymously()
+                    .addOnSuccessListener { authResult -> cont.resume(authResult) }
+                    .addOnFailureListener { error -> cont.resumeWithException(error) }
+            }
+            Result.success(result.user?.uid.orEmpty())
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
-    /** Uloskirjautuminen – ei toiminnallisuutta offline-tilassa. */
+    /** Uloskirjautuminen Firebase Authista. */
     fun signOut() {
-        // No-op offline-tilassa
+        auth.signOut()
     }
 }

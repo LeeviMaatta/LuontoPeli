@@ -14,3 +14,7 @@
 .cxx
 local.properties
 /app/debug
+/.vscode
+release-keystore.jks
+/.kotlin/errors
+/app/release
