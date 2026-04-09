@@ -26,6 +26,8 @@ import org.osmdroid.views.overlay.Polyline
 import com.example.luontopeli.viewmodel.WalkViewModel
 import com.example.luontopeli.viewmodel.formatDuration
 import com.example.luontopeli.viewmodel.formatDistance
+import androidx.compose.runtime.mutableLongStateOf
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
@@ -164,6 +166,26 @@ fun WalkStatsCard(viewModel: WalkViewModel) {
     val session by viewModel.currentSession.collectAsState()
     val isWalking by viewModel.isWalking.collectAsState()
 
+    // Ticker to update time display every second while walking
+    var currentTime by remember(session?.startTime) {
+        mutableLongStateOf(session?.startTime ?: System.currentTimeMillis())
+    }
+
+    LaunchedEffect(isWalking) {
+        if (isWalking) {
+            // While walking, update every second
+            while (isWalking) {
+                kotlinx.coroutines.delay(1000)
+                currentTime = System.currentTimeMillis()
+            }
+        } else {
+            // When walk ends, use the session's endTime
+            session?.endTime?.let {
+                currentTime = it
+            }
+        }
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -203,7 +225,7 @@ fun WalkStatsCard(viewModel: WalkViewModel) {
                     }
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            text = formatDuration(s.startTime),
+                            text = formatDuration(s.startTime, currentTime),
                             style = MaterialTheme.typography.headlineMedium,
                             color = MaterialTheme.colorScheme.primary
                         )
