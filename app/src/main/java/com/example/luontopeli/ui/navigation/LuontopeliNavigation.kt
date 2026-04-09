@@ -9,6 +9,7 @@ import com.example.luontopeli.ui.map.MapScreen
 //import com.example.luontopeli.camera.CameraScreen
 import com.example.luontopeli.ui.discover.DiscoverScreen
 import com.example.luontopeli.ui.stats.StatsScreen
+import com.example.luontopeli.camera.CameraScreen
 
 @Composable
 fun LuontopeliNavHost(
@@ -24,9 +25,9 @@ fun LuontopeliNavHost(
         composable(Screen.Map.route) {
             MapScreen()
         }
-        /*composable(Screen.Camera.route) {
+        composable(Screen.Camera.route) {
             CameraScreen()
-        }*/
+        }
         composable(Screen.Discover.route) {
             DiscoverScreen()
         }
